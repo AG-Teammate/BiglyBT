@@ -133,6 +133,8 @@ PEPeer
    */
   public int getUDPListenPort();
 
+  public InetAddress getLocalBindAddress();
+
   /**
    * Get the UDP port this peer is listening on for non-data connections
    * @return

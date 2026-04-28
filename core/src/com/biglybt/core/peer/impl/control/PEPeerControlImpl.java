@@ -1317,26 +1317,62 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 			boolean tcp_ok = TCPNetworkManager.TCP_OUTGOING_ENABLED && tcp_port > 0;
 			boolean udp_ok = UDPNetworkManager.UDP_OUTGOING_ENABLED && udp_port > 0;
 
-			if(tcp_ok && !((prefer_udp || prefer_udp_default) && udp_ok)){
+			InetAddress[] binds = NetworkAdmin.getSingleton().getAllBindAddresses( false );
 
-				fail_reason = makeNewOutgoingConnection( peer_source, ip_address, tcp_port, udp_port, true,
-						use_crypto, crypto_level, user_data); // directly inject the the imported peer
+			if ( binds.length <= 1 ){
 
-			}else if(udp_ok){
+				// single interface: original behaviour, no explicit bind injection
+				if(tcp_ok && !((prefer_udp || prefer_udp_default) && udp_ok)){
 
-				fail_reason = makeNewOutgoingConnection( peer_source, ip_address, tcp_port, udp_port, false,
-						use_crypto, crypto_level, user_data); // directly inject the the imported peer
+					fail_reason = makeNewOutgoingConnection( peer_source, ip_address, tcp_port, udp_port, true,
+							use_crypto, crypto_level, user_data); // directly inject the the imported peer
+
+				}else if(udp_ok){
+
+					fail_reason = makeNewOutgoingConnection( peer_source, ip_address, tcp_port, udp_port, false,
+							use_crypto, crypto_level, user_data); // directly inject the the imported peer
+
+				}else{
+
+					fail_reason = "No usable protocol";
+				}
 
 			}else{
 
-				fail_reason = "No usable protocol";
+				// multiple interfaces: one outbound connection per bind address
+				
+				boolean target_is_v6 = ip_address.contains( ":" );
+				
+				for ( InetAddress bind : binds ){
+					
+					if ( ( bind instanceof Inet6Address ) != target_is_v6 ) continue;
+
+					Map perBind = user_data != null ? new HashMap( user_data ) : new HashMap();
+					perBind.put( "explicit_bind_address", bind );
+
+					if(tcp_ok && !((prefer_udp || prefer_udp_default) && udp_ok)){
+
+						fail_reason = makeNewOutgoingConnection( peer_source, ip_address, tcp_port, udp_port, true,
+								use_crypto, crypto_level, perBind);
+
+					}else if(udp_ok){
+
+						fail_reason = makeNewOutgoingConnection( peer_source, ip_address, tcp_port, udp_port, false,
+								use_crypto, crypto_level, perBind);
+
+					}else{
+
+						fail_reason = "No usable protocol";
+						break;
+					}
+				}
 			}
 
 			//if(fail_reason != null)
 			//	Debug.out("Injected peer " + ip_address + ":" + tcp_port + " was not added - " + fail_reason);
-			
+
 		}else{
-			
+
 			fail_reason = "Already connected";
 		}
 		
@@ -1566,11 +1602,13 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		final boolean same_allowed = force || COConfigurationManager.getBooleanParameter("Allow Same IP Peers")
 				|| address.equals("127.0.0.1");
 
-		if(!same_allowed && PeerIdentityManager.containsIPAddress(_hash, address)){
-
-			if ( !PEPeerControl.TEST_PERMIT_PEER_CONNECTIONS ){
-			
-				return("Already connected to IP");
+		if(!same_allowed){
+			int maxBinds = NetworkAdmin.getSingleton().getAllBindAddresses( false ).length;
+			int maxAllowed = Math.max( 1, maxBinds );
+			if( PeerIdentityManager.countIPAddress( _hash, address ) >= maxAllowed ){
+				if ( !PEPeerControl.TEST_PERMIT_PEER_CONNECTIONS ){
+					return("Already connected to IP");
+				}
 			}
 		}
 
@@ -5299,26 +5337,45 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 							boolean udp_ok = UDPNetworkManager.UDP_OUTGOING_ENABLED && PeerManager.enable_public_udp_peers && 
 												udp_port > 0	&& udp_remaining > 0;
 
-							if(tcp_ok && !(prefer_udp_overall && udp_ok)){
+							InetAddress[] binds = NetworkAdmin.getSingleton().getAllBindAddresses( false );
+							InetAddress[] effectiveBinds = binds.length > 1 ? binds : new InetAddress[]{ null };
 
-								if(makeNewOutgoingConnection(source, item.getAddressString(), tcp_port, udp_port, true,
-										use_crypto, item.getCryptoLevel(), null) == null){
+							boolean target_is_v6 = item.getAddressString().contains( ":" );
+							
+							for ( InetAddress bind : effectiveBinds ){
+								
+								if ( bind != null && ( bind instanceof Inet6Address ) != target_is_v6 ) continue;
 
-									tcp_remaining--;
+								if ( tcp_remaining <= 0 && udp_remaining <= 0 ) break;
+								if ( remaining <= 0 ) break;
 
-									num_waiting_establishments++;
-									remaining--;
+								Map bindData = null;
+								if ( bind != null ){
+									bindData = new HashMap();
+									bindData.put( "explicit_bind_address", bind );
 								}
-							}else if(udp_ok){
 
-								if(makeNewOutgoingConnection(source, item.getAddressString(), tcp_port, udp_port, false,
-										use_crypto, item.getCryptoLevel(), null) == null){
+								if(tcp_ok && !(prefer_udp_overall && udp_ok)){
 
-									udp_remaining--;
+									if(makeNewOutgoingConnection(source, item.getAddressString(), tcp_port, udp_port, true,
+											use_crypto, item.getCryptoLevel(), bindData) == null){
 
-									num_waiting_establishments++;
+										tcp_remaining--;
 
-									remaining--;
+										num_waiting_establishments++;
+										remaining--;
+									}
+								}else if(udp_ok){
+
+									if(makeNewOutgoingConnection(source, item.getAddressString(), tcp_port, udp_port, false,
+											use_crypto, item.getCryptoLevel(), bindData) == null){
+
+										udp_remaining--;
+
+										num_waiting_establishments++;
+
+										remaining--;
+									}
 								}
 							}
 						}
@@ -5700,7 +5757,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 							&& peer.getConnectionState() == PEPeerTransport.CONNECTION_CONNECTING
 							&& peer.getLastMessageSentTimeMono() >= 0){
 
-						String key = peer.getIp() + ":" + peer.getPort();
+						InetAddress lb = peer.getLocalBindAddress();
+					String key = peer.getIp() + ":" + peer.getPort() + ":" + ( lb == null ? "" : lb.getHostAddress() );
 
 						List<PEPeerTransport> list = peer_map.get(key);
 
@@ -6307,11 +6365,16 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 	}
 
 	private boolean isAlreadyConnected(PeerItem peer_id){
+		int maxBinds = NetworkAdmin.getSingleton().getAllBindAddresses( false ).length;
+		int max = Math.max( 1, maxBinds );
+		int count = 0;
 		final List<PEPeerTransport> peer_transports = peer_transports_cow;
 		for(int i = 0; i < peer_transports.size(); i++){
 			final PEPeerTransport peer = peer_transports.get(i);
-			if(peer.getPeerItemIdentity().equals(peer_id))
-				return true;
+			if(peer.getPeerItemIdentity().equals(peer_id)){
+				if(++count >= max)
+					return true;
+			}
 		}
 		return false;
 	}
@@ -6650,11 +6713,20 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 
 	@Override
 	public PEPeerTransport getTransportFromIdentity(byte[] peer_id){
+		return( getTransportFromIdentity( peer_id, null ));
+	}
+
+	@Override
+	public PEPeerTransport getTransportFromIdentity(byte[] peer_id, InetAddress local_bind ){
 		final List<PEPeerTransport> peer_transports = peer_transports_cow;
 		for(int i = 0; i < peer_transports.size(); i++){
 			final PEPeerTransport conn = peer_transports.get(i);
-			if(Arrays.equals(peer_id, conn.getId()))
-				return conn;
+			if(Arrays.equals(peer_id, conn.getId())){
+				InetAddress eb = conn.getLocalBindAddress();
+				if ( (eb == null) == (local_bind == null) && (eb == null || eb.equals(local_bind))){
+					return conn;
+				}
+			}
 		}
 		return null;
 	}
@@ -7649,9 +7721,13 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		}
 
 		@Override
+		public InetAddress getLocalBindAddress(){
+		        return(null);
+		}
+
+		@Override
 		public PeerDescriptor 
-		getDescriptor()
-		{
+		getDescriptor()		{
 			return( PeerItemFactory.getDescriptor( this ));
 		}
 	}

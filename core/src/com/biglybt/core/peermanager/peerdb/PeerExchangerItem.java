@@ -333,7 +333,7 @@ public class PeerExchangerItem {
 
 
   public void destroy() {
-    parent_db.deregisterPeerConnection( base_peer );
+    parent_db.deregisterPeerConnection( this );
 
     try{  peers_mon.enter();
       connections_added.clear();

@@ -27,6 +27,7 @@ package com.biglybt.core.peer;
  *
  */
 
+import java.net.InetAddress;
 import java.util.List;
 import java.util.Map;
 
@@ -407,6 +408,8 @@ PEPeerManager
 	 * @return transport with matching identity, or null if no match is found
 	 */
 	public PEPeerTransport getTransportFromIdentity( byte[] peer_id );
+
+	public PEPeerTransport getTransportFromIdentity( byte[] peer_id, InetAddress local_bind );
 
 	/**
 	 * Locate an existing transport via [IP] Address.

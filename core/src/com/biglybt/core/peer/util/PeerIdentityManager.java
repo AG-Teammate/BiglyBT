@@ -19,6 +19,7 @@
 package com.biglybt.core.peer.util;
 
 
+import java.net.InetAddress;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Map;
@@ -184,12 +185,14 @@ public class PeerIdentityManager {
   private static class PeerIdentity {
     private final byte[] id;
     private final short	port;
+    private final InetAddress local_bind;
     private final int hashcode;
 
-    private PeerIdentity( byte[] _id, int local_port ) {
+    private PeerIdentity( byte[] _id, int local_port, InetAddress _local_bind ) {
       this.id = _id;
       port = (short)local_port;
-      this.hashcode = Arrays.hashCode( id );
+      local_bind = _local_bind;
+      this.hashcode = Arrays.hashCode( id ) ^ ( _local_bind == null ? 0 : _local_bind.hashCode() );
     }
 
     public boolean equals( Object obj ) {
@@ -200,6 +203,12 @@ public class PeerIdentityManager {
         	if ( port != other.port ){
         		return( false );
         	}
+        }
+        if ( (local_bind == null) != (other.local_bind == null) ){
+          return( false );
+        }
+        if ( local_bind != null && !local_bind.equals( other.local_bind )){
+          return( false );
         }
         return Arrays.equals(this.id, other.id);
       }
@@ -225,8 +234,8 @@ public class PeerIdentityManager {
    * @param ip remote peer's ip address
    */
   public static boolean
-  addIdentity( PeerIdentityDataID data_id, byte[] peer_id, int local_port, String ip ) {
-     PeerIdentity peerID = new PeerIdentity( peer_id, local_port );
+  addIdentity( PeerIdentityDataID data_id, byte[] peer_id, int local_port, InetAddress local_bind, String ip ) {
+     PeerIdentity peerID = new PeerIdentity( peer_id, local_port, local_bind );
 
     try{
       class_mon.enter();
@@ -263,7 +272,7 @@ public class PeerIdentityManager {
    * @param data_id id for the data item associated with this connection
    * @param peer_id id for this peer connection
    */
-  public static void removeIdentity( PeerIdentityDataID data_id, byte[] peer_id, int local_port  ) {
+  public static void removeIdentity( PeerIdentityDataID data_id, byte[] peer_id, int local_port, InetAddress local_bind ) {
 
     try{
     	class_mon.enter();
@@ -272,7 +281,7 @@ public class PeerIdentityManager {
 
     	if( dataEntry != null ) {
 
-    		PeerIdentity peerID = new PeerIdentity( peer_id, local_port );
+    		PeerIdentity peerID = new PeerIdentity( peer_id, local_port, local_bind );
 
     		String old = dataEntry.removePeer( peerID );
 
@@ -299,8 +308,8 @@ public class PeerIdentityManager {
    * @param peer_id id for this peer connection
    * @return true if the peer identity is found, false if not found
    */
-  public static boolean containsIdentity( PeerIdentityDataID data_id, byte[] peer_id, int local_port ) {
-    PeerIdentity peerID = new PeerIdentity( peer_id, local_port );
+  public static boolean containsIdentity( PeerIdentityDataID data_id, byte[] peer_id, int local_port, InetAddress local_bind ) {
+    PeerIdentity peerID = new PeerIdentity( peer_id, local_port, local_bind );
 
     try{
     	class_mon.enter();
@@ -373,6 +382,24 @@ public class PeerIdentityManager {
     return false;
   }
 
+  public static int countIPAddress( PeerIdentityDataID data_id, String ip ) {
+
+    try{
+    	class_mon.enter();
+
+    	DataEntry dataEntry = dataMap.get( data_id );
+
+    	if ( dataEntry != null ){
+
+    		return( dataEntry.countIP( ip ));
+    	}
+    }finally{
+    	class_mon.exit();
+    }
+
+    return 0;
+  }
+
   	protected static final class
   	DataEntry
   	{
@@ -384,6 +411,17 @@ public class PeerIdentityManager {
   		{
 		  return( _peerMap.containsValue( ip ));
 		}
+
+  		private int
+  		countIP(
+  			String	ip )
+  		{
+  			int count = 0;
+  			for ( String v : _peerMap.values() ){
+  				if ( ip.equals( v )) count++;
+  			}
+  			return( count );
+  		}
 
   		private boolean
   		hasPeer(

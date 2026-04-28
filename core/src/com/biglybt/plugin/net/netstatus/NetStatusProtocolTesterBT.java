@@ -618,14 +618,13 @@ NetStatusProtocolTesterBT
 						@Override
 						public Object
 						getConnectionProperty(
-							String property_name )
+						        String property_name )
 						{
-							if ( property_name == AEProxyFactory.PO_EXPLICIT_BIND ){
-								
-								return( explicit_bind );
-								
-							}else{
-								
+						        if ( AEProxyFactory.PO_EXPLICIT_BIND.equals( property_name )){
+
+						                return( explicit_bind );
+
+						        }else{								
 								return( null );
 							}
 						}

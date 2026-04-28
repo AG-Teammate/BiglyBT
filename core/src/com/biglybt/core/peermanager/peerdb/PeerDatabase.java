@@ -24,6 +24,7 @@ import java.util.*;
 import com.biglybt.core.peer.util.PeerUtils;
 import com.biglybt.core.util.AEMonitor;
 import com.biglybt.core.util.AENetworkClassifier;
+import com.biglybt.core.util.RandomUtils;
 import com.biglybt.core.util.SystemTime;
 import com.biglybt.core.util.bloom.BloomFilter;
 import com.biglybt.core.util.bloom.BloomFilterFactory;
@@ -44,7 +45,7 @@ public class PeerDatabase {
 
   private final long start_time = SystemTime.getMonotonousTime();
 
-  private final HashMap peer_connections = new HashMap();
+  private final List<PeerExchangerItem> peer_connections = new ArrayList<>();
 
   private final TreeSet<PeerItem> discovered_peers =
 		  new TreeSet<>(
@@ -119,10 +120,8 @@ public class PeerDatabase {
       PeerExchangerItem new_connection = new PeerExchangerItem( this, base_peer_item, helper );
 
       //update connection adds
-      for( Iterator it = peer_connections.entrySet().iterator(); it.hasNext(); ) {  //go through all existing connections
-        Map.Entry entry = (Map.Entry)it.next();
-        PeerItem old_key = (PeerItem)entry.getKey();
-        PeerExchangerItem old_connection = (PeerExchangerItem)entry.getValue();
+      for( PeerExchangerItem old_connection : peer_connections ) {  //go through all existing connections
+        PeerItem old_key = old_connection.getBasePeer();
 
         if( old_connection.getHelper().isSeed() && new_connection.getHelper().isSeed() ) {
           continue;  //dont exchange seed peers to other seeds
@@ -132,26 +131,40 @@ public class PeerDatabase {
         new_connection.notifyAdded( old_key );  //notify new connection of existing one for initial exchange
       }
 
-      peer_connections.put( base_peer_item, new_connection );
+      peer_connections.add( new_connection );
       return new_connection;
     }
     finally{  map_mon.exit();  }
   }
 
 
-  protected void deregisterPeerConnection( PeerItem base_peer_key ) {
+  protected void deregisterPeerConnection( PeerExchangerItem item ) {
+	PeerItem base_peer_key = item.getBasePeer();
     try{  map_mon.enter();
-      peer_connections.remove( base_peer_key );
+      peer_connections.remove( item );
 
-      //update connection drops
-      for( Iterator it = peer_connections.values().iterator(); it.hasNext(); ) {  //go through all remaining connections
-        PeerExchangerItem old_connection = (PeerExchangerItem)it.next();
-
-        //dont skip seed2seed drop notification, as the dropped peer may not have been seeding initially
-        old_connection.notifyDropped( base_peer_key );  //notify existing connection of drop
+      if ( countConnectionsFor( base_peer_key ) == 0 ){
+	      //update connection drops
+	      for( PeerExchangerItem old_connection : peer_connections ) {  //go through all remaining connections
+	        //dont skip seed2seed drop notification, as the dropped peer may not have been seeding initially
+	        old_connection.notifyDropped( base_peer_key );  //notify existing connection of drop
+	      }
       }
     }
     finally{  map_mon.exit();  }
+  }
+
+  private int
+  countConnectionsFor(
+	PeerItem	peer )
+  {
+	  int count = 0;
+	  for ( PeerExchangerItem item: peer_connections ){
+		  if ( item.getBasePeer().equals( peer )){
+			  count++;
+		  }
+	  }
+	  return( count );
   }
 
   public void
@@ -165,9 +178,7 @@ public class PeerDatabase {
 		  try{
 			  map_mon.enter();
 
-			  for ( Iterator it = peer_connections.values().iterator(); it.hasNext(); ){
-
-				  PeerExchangerItem connection = (PeerExchangerItem)it.next();
+			  for ( PeerExchangerItem connection : peer_connections ){
 
 				  if ( connection != item && connection.getHelper().isSeed()){
 
@@ -192,34 +203,26 @@ public class PeerDatabase {
    */
   public void addDiscoveredPeer( PeerItem peer ) {
     try{  map_mon.enter();
-      for( Iterator it = peer_connections.values().iterator(); it.hasNext(); ) {  //check to make sure we dont already know about this peer
-        PeerExchangerItem connection = (PeerExchangerItem)it.next();
+      for( PeerExchangerItem connection : peer_connections ) {  //check to make sure we dont already know about this peer
         if( connection.isConnectedToPeer( peer ) )  return;  //we already know about this peer via exchange, so ignore discovery
       }
 
       if( !discovered_peers.contains( peer ) ) {
-        discovered_peers.add( peer );  //add unknown peer
-
-        int max_cache_size = PeerUtils.MAX_CONNECTIONS_PER_TORRENT * 2;	// cache twice the amount to allow for failures
-        if( max_cache_size < 1 || max_cache_size > MAX_DISCOVERED_PEERS )  max_cache_size = MAX_DISCOVERED_PEERS;
-
-        while( discovered_peers.size() > max_cache_size ) {
-
-        	Iterator<PeerItem> it = discovered_peers.iterator();
-        	it.next();
-        	it.remove();
+        if( discovered_peers.size() >= MAX_DISCOVERED_PEERS ) {
+          //remove the lowest priority peer
+          PeerItem lowest_priority_peer = (PeerItem)discovered_peers.last();
+          if( peer.getPriority() > lowest_priority_peer.getPriority() ) {
+            discovered_peers.remove( lowest_priority_peer );
+            if ( lowest_priority_peer.getNetwork() != AENetworkClassifier.AT_PUBLIC ){
+            	discovered_peers_non_pub.remove( lowest_priority_peer );
+            }
+          }
+          else return;  //ignore discovery, we have better ones
         }
 
+        discovered_peers.add( peer );
         if ( peer.getNetwork() != AENetworkClassifier.AT_PUBLIC ){
-
-        	 discovered_peers_non_pub.add( peer );
-
-        	 while( discovered_peers_non_pub.size() > max_cache_size ) {
-
-             	Iterator<PeerItem> it = discovered_peers_non_pub.iterator();
-             	it.next();
-             	it.remove();
-             }
+        	discovered_peers_non_pub.add( peer );
         }
       }
     }
@@ -228,182 +231,42 @@ public class PeerDatabase {
 
 
   /**
-   * Mark the given peer as ourself.
-   * @param self peer
-   */
-  public void setSelfPeer( PeerItem self ) {  self_peer = self;  }
-
-  /**
-   * Get the peer item that represents ourself.
-   * @return self peer, or null if unknown
-   */
-  public PeerItem getSelfPeer() {
-    /*
-    //disabled for now, as getExternalIpAddress() will potential run a full version check every 60s
-    if( self_peer == null ) {
-      //determine our 'self' info from config
-      String ip = VersionCheckClient.getSingleton().getExternalIpAddress();
-      if( ip != null && ip.length() > 0 ) {
-        self_peer = PeerItemFactory.createPeerItem( ip, NetworkManager.getSingleton().getTCPListeningPortNumber(), 0 );
-      }
-    }
-    */
-
-    return self_peer;
-  }
-
-  public PeerItem[]
-  getDiscoveredPeers()
-  {
-	  try{
-		  map_mon.enter();
-
-		  return((PeerItem[])discovered_peers.toArray( new PeerItem[discovered_peers.size()] ));
-
-	  }finally{
-
-		  map_mon.exit();
-	  }
-  }
-
-  public PeerItem[]
-  getDiscoveredPeers(
-	String	address )
-  {
-	  List<PeerItem>	result = null;
-
-	  try{
-		  map_mon.enter();
-
-		  Iterator<PeerItem> it = discovered_peers.iterator();
-
-		  while( it.hasNext()){
-
-			  PeerItem peer = it.next();
-
-			  if( peer.getIP().equals( address )){
-
-				  if ( result == null ){
-
-					  result = new ArrayList<>();
-				  }
-
-				  result.add( peer );
-			  }
-		  }
-	  }finally{
-
-		  map_mon.exit();
-	  }
-
-	  if ( result == null ){
-
-		  return( new PeerItem[0]);
-
-	  }else{
-
-		  return( result.toArray( new PeerItem[result.size()] ));
-
-	  }
-  }
-
-  public int
-  getDiscoveredPeerCount()
-  {
-	  try{
-		  map_mon.enter();
-
-		  return( discovered_peers.size());
-
-	  }finally{
-
-		  map_mon.exit();
-	  }
-  }
-
-  /**
-   * Get the next potential peer for optimistic connect.
-   * @return peer to connect, or null of no optimistic peer available
+   * Get an optimistic connect peer from the database.
+   * @return peer to try connect to
    */
   public PeerItem getNextOptimisticConnectPeer( boolean non_public ) {
-
-	  PeerItem item = getNextOptimisticConnectPeer(non_public,0);
-
-	  /*
-	  if ( item != null ){
-
-		 System.out.println( "pri: " + item.getPriority());
-	  }
-	  */
-
-	  return( item );
+    return getNextOptimisticConnectPeer( non_public, 0 );
   }
 
-  private PeerItem getNextOptimisticConnectPeer( boolean non_public, final int recursion_count ) {
+  private PeerItem getNextOptimisticConnectPeer( boolean non_public, int recursion_count ) {
     long now = SystemTime.getMonotonousTime();
+    boolean starting_up = now - start_time < STARTUP_MILLIS;
 
-    boolean	starting_up = now - start_time <= STARTUP_MILLIS;
+    PeerItem peer = null;
+    boolean discovered_peer = false;
+    boolean tried_pex = false;
 
-    PeerItem 	peer 			= null;
-    boolean	 	discovered_peer = false;
-    boolean		tried_pex 		= false;
+    //try picking a discovered peer first, as those are usually more recent
+    if( ( starting_up || RandomUtils.nextInt( 3 ) != 0 ) ) {
+	    try{  map_mon.enter();
+	      TreeSet<PeerItem> set = non_public?discovered_peers_non_pub:discovered_peers;
 
-    if ( starting_up && total_peers_returned % 5 == 0 ){
-
-    		// inject a few PEX peers during startup as we know they're live and can help bootstrap the torrent
-
-    	peer = getPeerFromPEX( now, starting_up, non_public );
-
-    	tried_pex = true;
+	      if( !set.isEmpty() ) {
+	        peer = set.first();
+	        set.remove( peer );
+	        if ( !non_public && peer.getNetwork() != AENetworkClassifier.AT_PUBLIC ){
+	        	discovered_peers_non_pub.remove( peer );
+	        }
+	        discovered_peer = true;
+	      }
+	    }
+	    finally{  map_mon.exit();  }
     }
+
 
     if ( peer == null ){
 
-	    	//first see if there are any unknown peers to try
-
-	    try{
-	    	map_mon.enter();
-
-	    	if( !discovered_peers.isEmpty() ) {
-
-	    		if ( non_public ){
-
-	    			if ( !discovered_peers_non_pub.isEmpty()){
-
-	    				Iterator<PeerItem> it = discovered_peers_non_pub.iterator();
-
-	    				peer = it.next();
-
-			    		it.remove();
-
-			    		discovered_peer	= true;
-
-			    		discovered_peers.remove( peer );
-	    			}
-	    		}else{
-
-		    		Iterator<PeerItem> it = discovered_peers.iterator();
-
-		    		peer = it.next();
-
-		    		it.remove();
-
-		    		discovered_peer	= true;
-
-		    		if ( peer.getNetwork() != AENetworkClassifier.AT_PUBLIC ){
-
-		    			discovered_peers_non_pub.remove( peer );
-		    		}
-	    		}
-	    	}
-	    }finally{
-	    	map_mon.exit();
-	    }
-    }
-
-    	//pick one from those obtained via peer exchange if needed
-
-    if ( peer == null && !tried_pex ) {
+    	tried_pex = true;
 
     	peer = getPeerFromPEX( now, starting_up, non_public );
     }
@@ -499,33 +362,36 @@ public class PeerDatabase {
 
 		  if ( non_public ){
 
-			  	// we'll get stuck for a bit if we run out of non-pub peers and we're not
-			  	// using 'pub' peers because don't need to as running out of 'pub' peers is
-			  	// what drives cache rebuild. However, the only decent solution is to
-			  	// maintain a separate non-pub cache which seems to much effort...
-
 			  peer = null;
 
-			  while( popularity_pos_non_pub < cached_peer_popularities.length ){
+			  for ( int i=popularity_pos_non_pub; i<cached_peer_popularities.length; i++ ){
 
-				  PeerItem temp = cached_peer_popularities[popularity_pos_non_pub];
+				  PeerItem p = cached_peer_popularities[i];
 
-				  popularity_pos_non_pub++;
+				  if ( p.getNetwork() != AENetworkClassifier.AT_PUBLIC ){
 
-				  if ( temp.getNetwork() != AENetworkClassifier.AT_PUBLIC ){
+					  peer = p;
 
-					  peer = temp;
+					  // we don't want to return the same peer again, so we need to track where we are.
+					  // However, we can't easily remove from the array, so we just swap it with the
+					  // current position and increment the position.
+
+					  cached_peer_popularities[i] = cached_peer_popularities[popularity_pos_non_pub];
+					  cached_peer_popularities[popularity_pos_non_pub] = peer;
+
+					  popularity_pos_non_pub++;
 
 					  break;
 				  }
 			  }
 		  }else{
 
-			  peer = cached_peer_popularities[ popularity_pos ];
+			  peer = cached_peer_popularities[popularity_pos++];
+		  }
 
-			  popularity_pos++;
+		  if ( peer != null ){
 
-			  if ( peer.getNetwork() != AENetworkClassifier.AT_PUBLIC ){
+			  if ( popularity_pos == cached_peer_popularities.length ){
 
 				  popularity_pos_non_pub = popularity_pos;
 			  }
@@ -568,8 +434,7 @@ public class PeerDatabase {
 
     try{  map_mon.enter();
       //count popularity of all known peers
-      for( Iterator it = peer_connections.values().iterator(); it.hasNext(); ) {
-        PeerExchangerItem connection = (PeerExchangerItem)it.next();
+      for( PeerExchangerItem connection : peer_connections ) {
         PeerItem[] peers = connection.getConnectedPeers();
 
         for( int i=0; i < peers.length; i++ ) {
@@ -614,6 +479,68 @@ public class PeerDatabase {
     return sorted_peers;
   }
 
+
+  public PeerItem
+  getSelfPeer()
+  {
+	  return( self_peer );
+  }
+
+  public void
+  setSelfPeer(
+	PeerItem	_self_peer )
+  {
+	  self_peer = _self_peer;
+  }
+
+  public int
+  getDiscoveredPeerCount()
+  {
+	  return( discovered_peers.size());
+  }
+
+  public PeerItem[]
+  getDiscoveredPeers()
+  {
+	  try{
+		  map_mon.enter();
+
+		  PeerItem[] res = new PeerItem[discovered_peers.size()];
+
+		  discovered_peers.toArray( res );
+
+		  return( res );
+
+	  }finally{
+
+		  map_mon.exit();
+	  }
+  }
+
+  public PeerItem[]
+  getDiscoveredPeers(
+	String	address )
+  {
+	  try{
+		  map_mon.enter();
+
+		  List<PeerItem> res = new ArrayList<>();
+
+		  for ( PeerItem p: discovered_peers ){
+
+			  if ( p.getAddressString().equals( address )){
+
+				  res.add( p );
+			  }
+		  }
+
+		  return( res.toArray( new PeerItem[res.size()]));
+
+	  }finally{
+
+		  map_mon.exit();
+	  }
+  }
 
   //TODO destroy() method?
 

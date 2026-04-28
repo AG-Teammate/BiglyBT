@@ -2642,15 +2642,14 @@ BuddyPluginBuddy
 					@Override
 					public Object 
 					getConnectionProperty(
-						String property_name )
+					        String property_name )
 					{
-						if ( property_name == AEProxyFactory.PO_PEER_NETWORKS ){
+					        if ( AEProxyFactory.PO_PEER_NETWORKS.equals( property_name )){
 
-							return( plugin_network.getDDBNetworks());
-						}
-						
-						return( null );
-					}
+					                return( plugin_network.getDDBNetworks());
+					        }
+
+					        return( null );					}
 				});
 
 			return( con );

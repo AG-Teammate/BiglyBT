@@ -107,6 +107,8 @@ implements PEPeerTransport
 
 	private byte	crypto_level;
 
+	private InetAddress local_bind_address; // null for inbound; set from user_data for outbound
+
 	protected PEPeerStats peer_stats;
 
 	private final ArrayList<DiskManagerReadRequest> requested = new ArrayList<>();
@@ -483,6 +485,17 @@ implements PEPeerTransport
 
 		plugin_connection = new ConnectionImpl(connection, incoming_raw );
 
+		Transport t = connection.getTransport();
+		if ( t != null ){
+			TransportStartpoint sp = t.getTransportStartpoint();
+			if ( sp != null ){
+				InetSocketAddress sa = sp.getProtocolStartpoint().getAddress();
+				if ( sa != null ){
+					local_bind_address = sa.getAddress();
+				}
+			}
+		}
+
 		peer_stats = manager.createPeerStats( this );
 
 		changePeerState( PEPeer.CONNECTING );
@@ -607,6 +620,10 @@ implements PEPeerTransport
 		udp_listen_port	= _udp_port;
 		crypto_level	= _crypto_level;
 		data			= _initial_user_data;
+
+		if ( data != null ){
+			local_bind_address = (InetAddress) data.get( "explicit_bind_address" );
+		}
 
 		network	= AENetworkClassifier.categoriseAddress( ip );
 
@@ -894,6 +911,19 @@ implements PEPeerTransport
 							return;
 						}
 
+						if ( local_bind_address == null ){
+							Transport t = connection.getTransport();
+							if ( t != null ){
+								TransportStartpoint sp = t.getTransportStartpoint();
+								if ( sp != null ){
+									InetSocketAddress sa = sp.getProtocolStartpoint().getAddress();
+									if ( sa != null ){
+										local_bind_address = sa.getAddress();
+									}
+								}
+							}
+						}
+
 						generateSessionId();
 
 						if (Logger.isEnabled())
@@ -949,13 +979,17 @@ implements PEPeerTransport
 					getConnectionProperty(
 						String property_name )
 					{
-						if ( property_name == AEProxyFactory.PO_PEER_NETWORKS ){
+						if ( AEProxyFactory.PO_PEER_NETWORKS.equals( property_name )){
 
 							return( manager.getAdapter().getEnabledNetworks());
-							
-						}else if ( property_name.equals( AEProxyFactory.PO_LOCAL_PORT )){
-							
+
+						}else if ( AEProxyFactory.PO_LOCAL_PORT.equals( property_name )){
+
 							return( manager.getAdapter().getTCPListeningPortNumber());
+
+						}else if ( AEProxyFactory.PO_EXPLICIT_BIND.equals( property_name )){
+
+							return( local_bind_address );
 						}
 
 						return( null );
@@ -1093,7 +1127,7 @@ implements PEPeerTransport
 
 			if( identityAdded ) {  //remove identity
 				if( peer_id != null )
-					PeerIdentityManager.removeIdentity( manager.getPeerIdentityDataID(), peer_id, getPort());
+					PeerIdentityManager.removeIdentity( manager.getPeerIdentityDataID(), peer_id, getPort(), local_bind_address );
 				else
 					Debug.out( "PeerIdentity added but peer_id == null !!!" );
 				identityAdded	= false;
@@ -2164,6 +2198,9 @@ implements PEPeerTransport
 	public String getIp() {  return ip;  }
 	@Override
 	public InetAddress getAlternativeIPv6() { return alternativeAddress; }
+
+	@Override
+	public InetAddress getLocalBindAddress() { return local_bind_address; }
 	@Override
 	public int getPort() {  return port;  }
 
@@ -2881,7 +2918,7 @@ implements PEPeerTransport
 		}
 
 		//make sure we are not already connected to this peer
-		boolean sameIdentity = PeerIdentityManager.containsIdentity( my_peer_data_id, peer_id, getPort());
+		boolean sameIdentity = PeerIdentityManager.containsIdentity( my_peer_data_id, peer_id, getPort(), local_bind_address );
 		boolean sameIP = false;
 
 		if ( PEPeerControl.TEST_PERMIT_PEER_CONNECTIONS ){
@@ -2892,7 +2929,9 @@ implements PEPeerTransport
 		//allow loopback connects for co-located proxy-based connections and testing
 		boolean same_allowed = COConfigurationManager.getBooleanParameter( "Allow Same IP Peers" ) || ip.equals( "127.0.0.1" );
 		if( !same_allowed ){
-			if( PeerIdentityManager.containsIPAddress( my_peer_data_id, ip )) {
+			int maxBinds = com.biglybt.core.networkmanager.admin.NetworkAdmin.getSingleton().getAllBindAddresses( false ).length;
+			int maxAllowed = Math.max( 1, maxBinds );
+			if( PeerIdentityManager.countIPAddress( my_peer_data_id, ip ) >= maxAllowed ) {
 				sameIP = true;
 			}
 		}
@@ -2901,7 +2940,7 @@ implements PEPeerTransport
 			
 			boolean close = true;
 
-			PEPeerTransport existing = manager.getTransportFromIdentity( peer_id );
+			PEPeerTransport existing = manager.getTransportFromIdentity( peer_id, local_bind_address );
 
 			if ( existing != null ){
 
@@ -3031,7 +3070,7 @@ implements PEPeerTransport
 				return;
 			}
 
-			if ( !PeerIdentityManager.addIdentity( my_peer_data_id, peer_id, getPort(), ip )){
+			if ( !PeerIdentityManager.addIdentity( my_peer_data_id, peer_id, getPort(), local_bind_address, ip )){
 
 				if ( !PEPeerControl.TEST_PERMIT_PEER_CONNECTIONS ){
 				

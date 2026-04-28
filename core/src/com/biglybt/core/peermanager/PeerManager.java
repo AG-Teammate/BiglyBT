@@ -1807,6 +1807,8 @@ public class PeerManager implements CoreStatsProvider {
 
 			public PEPeerTransport getTransportFromIdentity( byte[] peer_id ){ log(); return( null ); }
 
+			public PEPeerTransport getTransportFromIdentity( byte[] peer_id, InetAddress local_bind ){ log(); return( null ); }
+
 			public PEPeerTransport getTransportFromAddress(String peer){ log(); return( null ); }
 
 			public boolean

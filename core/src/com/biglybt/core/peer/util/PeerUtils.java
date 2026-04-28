@@ -693,6 +693,27 @@ public class PeerUtils {
 		NetworkInterface result = null;
 
 		try{	
+			InetAddress lba = peer.getLocalBindAddress();
+			
+			if ( lba != null ){
+				Object[] details = network_admin.getInterfaceForAddress( lba );
+				
+				if ( details != null ){
+					Object o = details[0];
+					
+					if ( o instanceof NetworkInterface ){
+						
+						result = (NetworkInterface)o;
+						
+						peer.setUserData( ni_key, result );
+						
+						peer.setUserData( ni_address_key, lba );
+						
+						return( result );
+					}
+				}
+			}
+
 			Object data = peer.getUserData( ni_key );
 				
 			if ( data instanceof NetworkInterface ){

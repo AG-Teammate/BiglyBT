@@ -229,6 +229,12 @@ PEPeerTransport
   public PeerItem getPeerItemIdentity();
 
   /**
+   * Get the local bind address used for this outbound connection, or null for
+   * inbound connections and connections using the default interface selection.
+   */
+  public InetAddress getLocalBindAddress();
+
+  /**
    * is peer waiting for a disk read with no network writes queued
    * @return
    */

@@ -212,6 +212,9 @@ PeerForeignDelegate
     @Override
     public InetAddress getAlternativeIPv6() {  return null; }
 
+    @Override
+    public InetAddress getLocalBindAddress() {  return null; }
+
 
 
     @Override
