@@ -2963,6 +2963,20 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		return _myPeerId;
 	}
 
+	@Override
+	public byte[] getPeerId( InetAddress local_bind ){
+		if ( local_bind == null ){
+			return( _myPeerId );
+		}
+		byte[] res = new byte[20];
+		System.arraycopy( _myPeerId, 0, res, 0, 20 );
+		byte[] b_addr = local_bind.getAddress();
+		for ( int i=0; i<b_addr.length; i++ ){
+			res[19-i] ^= b_addr[b_addr.length-1-i];
+		}
+		return( res );
+	}
+
 	// get the remaining percentage
 	@Override
 	public long getRemaining(){

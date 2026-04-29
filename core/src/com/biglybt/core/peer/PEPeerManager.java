@@ -75,6 +75,9 @@ PEPeerManager
 	public byte[]
 	getPeerId();
 
+	public byte[]
+	getPeerId( InetAddress local_bind );
+
 	public int[] getAvailability();
 
 	public int getAvailability(int pieceNumber);

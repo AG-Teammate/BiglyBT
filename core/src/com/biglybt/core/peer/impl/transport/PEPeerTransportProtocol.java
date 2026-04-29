@@ -1407,8 +1407,8 @@ implements PEPeerTransport
 				}
 			}
 
-			BTHandshake handshake =	new BTHandshake( manager.getTargetHash(),
-					manager.getPeerId(), msg_mode, other_peer_handshake_version );
+			BTHandshake handshake = new BTHandshake( manager.getTargetHash(),
+			                manager.getPeerId( local_bind_address ), msg_mode, other_peer_handshake_version );
 
 			if (Logger.isEnabled())
 			    Logger.log(new LogEvent(this, LOGID,

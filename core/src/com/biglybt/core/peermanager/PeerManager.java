@@ -1521,9 +1521,14 @@ public class PeerManager implements CoreStatsProvider {
 			public byte[]
 			getPeerId()
 			{
-				return( adapter.getPeerID());
+			        return( adapter.getPeerID());
 			}
 
+			public byte[]
+			getPeerId( InetAddress local_bind )
+			{
+			        return( adapter.getPeerID());
+			}
 			public int[] 
 			getAvailability()
 			{ 
