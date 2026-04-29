@@ -2854,17 +2854,19 @@ TRTrackerBTAnnouncerImpl
 
    		if ( has_public_net && public_ip_override != null ){
 
-   			ip = public_ip_override;
+   			if ( NetworkAdmin.getSingleton().getAllBindAddresses( false ).length <= 1 ){
+
+   				ip = public_ip_override;
+   			}
 
    		}else{
 
-	   		if ( ip_override != null && !TorrentUtils.isDecentralised( ip_override )){
+   			if ( ip_override != null && !TorrentUtils.isDecentralised( ip_override )){
 
-	   			ip = ip_override;
-	   		}
+   				ip = ip_override;
+   			}
    		}
-   	}
-   	
+   	}   	
    	if ( ip == null && tracker_network == AENetworkClassifier.AT_TOR ){
    		   				
    		InetSocketAddress tor_local = AEPluginProxyHandler.getLocalAddress( tracker_network_host, has_public_net?27657:27658 );

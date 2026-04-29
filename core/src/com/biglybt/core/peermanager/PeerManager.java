@@ -1276,20 +1276,23 @@ public class PeerManager implements CoreStatsProvider {
 
 			boolean same_allowed = COConfigurationManager.getBooleanParameter( "Allow Same IP Peers" ) || ( address_mbn != null && address_mbn.isLoopbackAddress());
 
-			if ( !same_allowed && PeerIdentityManager.containsIPAddress( control.getPeerIdentityDataID(), host_address )){
+			if ( !same_allowed ){
+				int maxBinds = NetworkAdmin.getSingleton().getAllBindAddresses( false ).length;
+				int maxAllowed = Math.max( 1, maxBinds );
+				if ( PeerIdentityManager.countIPAddress( control.getPeerIdentityDataID(), host_address ) >= maxAllowed ){
+					if (Logger.isEnabled()){
 
-				if (Logger.isEnabled()){
+						Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING,
+								"Incoming connection from [" + connection
+								+ "] dropped as IP address already "
+								+ "connected for ["
+								+ control.getDisplayName() + "]"));
+					}
 
-					Logger.log(new LogEvent(LOGID, LogEvent.LT_WARNING,
-							"Incoming connection from [" + connection
-							+ "] dropped as IP address already "
-							+ "connected for ["
-							+ control.getDisplayName() + "]"));
+					connection.close( "already connected to peer");
+
+					return;
 				}
-
-				connection.close( "already connected to peer");
-
-				return;
 			}
 
 			if ( AERunStateHandler.isUDPNetworkOnly()){
