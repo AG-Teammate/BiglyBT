@@ -2971,8 +2971,8 @@ public class PEPeerControlImpl extends LogRelation implements PEPeerControl, Dis
 		byte[] res = new byte[20];
 		System.arraycopy( _myPeerId, 0, res, 0, 20 );
 		byte[] b_addr = local_bind.getAddress();
-		for ( int i=0; i<b_addr.length; i++ ){
-			res[19-i] ^= b_addr[b_addr.length-1-i];
+		for ( int i=0; i<12; i++ ){
+			res[8+i] ^= b_addr[i % b_addr.length];
 		}
 		return( res );
 	}
